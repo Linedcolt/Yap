@@ -1,364 +1,204 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Rooms Chat — Single File (Supabase)</title>
-
-<!-- Supabase UMD (browser) -->
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-
-<style>
-  :root{
-    --bg:#081426; --panel:#0b1b2a; --muted:#9fb0c9; --accent:#6bd0ff; --glass: rgba(255,255,255,0.03);
-    --radius:16px;
-  }
-  html,body{height:100%;margin:0;background:linear-gradient(180deg,#021125 0%, #071427 100%);font-family:Inter,system-ui,Segoe UI,Roboto,Arial;color:#e6f1fb}
-  .app-wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:18px;user-select:none}
-  .app{width:min(920px,96vw);height:min(820px,94vh);background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));border-radius:var(--radius);box-shadow:0 25px 60px rgba(2,6,23,0.6);display:grid;grid-template-rows:72px 1fr 92px;overflow:hidden;border:1px solid rgba(255,255,255,0.03)}
-  .topbar{padding:14px 18px;display:flex;align-items:center;gap:12px;border-bottom:1px solid rgba(255,255,255,0.02)}
-  .brand{display:flex;gap:10px;align-items:center;font-weight:700;font-size:18px}
-  .dot{width:12px;height:12px;border-radius:50%;background:var(--accent);box-shadow:0 0 12px rgba(107,208,255,0.25)}
-  .controls{margin-left:auto;display:flex;gap:8px;align-items:center}
-  .small{font-size:13px;padding:8px 10px;border-radius:10px;background:transparent;border:1px solid rgba(255,255,255,0.03);color:var(--muted)}
-  #messages-wrap{padding:14px;overflow:auto;-webkit-overflow-scrolling:touch}
-  #messages{display:flex;flex-direction:column;gap:10px;max-height:100%}
-  .message{max-width:78%;padding:10px 12px;border-radius:12px;line-height:1.25}
-  .meta{font-size:12px;color:var(--muted);margin-bottom:6px}
-  .you{align-self:flex-end;background:linear-gradient(180deg,#083a4a,#04566f);color:#eafcff;border:1px solid rgba(255,255,255,0.03)}
-  .other{align-self:flex-start;background:var(--glass);color:#dff0ff;border:1px solid rgba(255,255,255,0.02)}
-  .composer{display:flex;gap:10px;padding:12px;align-items:center;border-top:1px solid rgba(255,255,255,0.02);background:linear-gradient(180deg, rgba(255,255,255,0.00), rgba(255,255,255,0.01))}
-  .composer input[type="text"]{background:transparent;border:1px solid rgba(255,255,255,0.03);padding:10px 12px;border-radius:10px;color:inherit;outline:none;font-size:15px}
-  .flex{flex:1;display:flex;gap:8px}
-  .btn{background:linear-gradient(180deg,var(--accent),#37b8db);border:none;padding:10px 14px;border-radius:10px;color:#003142;font-weight:700;cursor:pointer;box-shadow:0 6px 18px rgba(59,162,201,0.15)}
-  .modal{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(2,6,12,0.6)}
-  .card{background:#071427;padding:18px;border-radius:12px;border:1px solid rgba(255,255,255,0.03);width:min(640px,92vw)}
-  .row{display:flex;gap:8px;align-items:center}
-  .hint{font-size:13px;color:var(--muted);margin-top:8px}
-  @media (max-width:640px){.app{width:100vw;height:100vh;border-radius:0;grid-template-rows:64px 1fr 72px}.message{max-width:86%}}
-</style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Yap</title>
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; height: 100vh; display:flex; }
+    aside { width: 300px; border-right:1px solid #eee; padding: 16px; box-sizing:border-box; }
+    main { flex:1; display:flex; flex-direction:column; }
+    .room-list { max-height: 40vh; overflow:auto; margin-bottom: 12px; }
+    .messages { flex:1; padding: 16px; overflow:auto; background:#fafafa; }
+    .msg { margin-bottom:8px; }
+    footer { display:flex; padding:8px; border-top:1px solid #eee; }
+    input, button, textarea { font:inherit; }
+    .small { font-size: 0.9rem; color:#666 }
+    .invite { word-break:break-all; background:#f3f6ff; padding:8px; border-radius:6px; margin-top:8px; }
+  </style>
 </head>
 <body>
-  <div class="app-wrap">
-    <div class="app" role="application" aria-label="Rooms chat">
-      <div class="topbar">
-        <div class="brand"><div class="dot" aria-hidden="true"></div><div>Rooms Chat</div></div>
-        <div id="roomName" style="margin-left:12px;font-weight:600;color:var(--muted)"></div>
-        <div class="controls">
-          <button id="createRoomBtn" class="small">Create room</button>
-          <button id="copyInviteBtn" class="small" title="Copy invite link">Copy invite</button>
-          <button id="shareBtn" class="small" title="Share (mobile)">Share</button>
-          <button id="leaveBtn" class="small">Leave</button>
-        </div>
-      </div>
-
-      <div id="messages-wrap">
-        <div id="messages" aria-live="polite"></div>
-      </div>
-
-      <form id="composer" class="composer" autocomplete="off">
-        <input id="username" type="text" placeholder="your name (optional)" style="width:150px" />
-        <div class="flex">
-          <input id="message" type="text" placeholder="Write a message…" />
-        </div>
-        <button id="sendBtn" class="btn" type="submit">Send</button>
-      </form>
+  <aside>
+    <h3>Rooms</h3>
+    <div>
+      <input id="newRoomName" placeholder="New room name" />
+      <button id="createRoomBtn">Create</button>
     </div>
-  </div>
-
-  <!-- Modal for create/join -->
-  <div id="modal" class="modal" style="display:none">
-    <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center">
-        <h3 style="margin:0">Join or Create a Room</h3>
-        <button id="closeModal" class="small">Close</button>
-      </div>
-
-      <div style="margin-top:12px">
-        <div style="margin-bottom:8px"><strong>Create a new room</strong></div>
-        <div class="row">
-          <input id="newRoomName" type="text" placeholder="Room name (optional)" style="flex:1" />
-          <button id="doCreate" class="btn">Create</button>
-        </div>
-        <div class="hint">Creates a fresh room and redirects you to the invite link.</div>
-      </div>
-
-      <hr style="margin:14px 0;border-color:rgba(255,255,255,0.03)">
-
-      <div>
-        <div style="margin-bottom:8px"><strong>Join with invite link or Room ID</strong></div>
-        <div class="row">
-          <input id="joinRoomId" type="text" placeholder="Paste invite link or room id" style="flex:1" />
-          <button id="doJoin" class="btn">Join</button>
-        </div>
-        <div class="hint">Invite links look like <code>?room=UUID</code>.</div>
-      </div>
+    <div class="room-list" id="rooms"></div>
+    <div style="margin-top:12px">
+      <div class="small">Current User</div>
+      <input id="username" placeholder="your name" />
     </div>
-  </div>
+    <div id="inviteBox" style="margin-top:12px"></div>
+  </aside>
 
-<script>
-/* ---------------------------
-   CONFIG: replace these
-   ---------------------------
-   SUPABASE_URL example: https://abc123xyz.supabase.co
-   SUPABASE_ANON_KEY: your anon/public key (do NOT use service_role)
-*/
-const SUPABASE_URL = 'https://znksxdaundclmwxhrjgi.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inpua3N4ZGF1bmRjbG13eGhyamdpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA4MzM4ODQsImV4cCI6MjA4NjQwOTg4NH0.NXpT0LST8S3508BkMTM2tTOEUZ_eg0VTW5f2hYZ0aYc';
-/* --------------------------- */
+  <main>
+    <header style="padding:12px;border-bottom:1px solid #eee">
+      <strong id="roomTitle">No room selected</strong>
+    </header>
 
-(async function(){
-  // basic UI refs
-  const $modal = document.getElementById('modal');
-  const $createRoomBtn = document.getElementById('createRoomBtn');
-  const $copyInviteBtn = document.getElementById('copyInviteBtn');
-  const $shareBtn = document.getElementById('shareBtn');
-  const $leaveBtn = document.getElementById('leaveBtn');
-  const $roomName = document.getElementById('roomName');
-  const $messages = document.getElementById('messages');
-  const $composer = document.getElementById('composer');
-  const $username = document.getElementById('username');
-  const $message = document.getElementById('message');
-  const $sendBtn = document.getElementById('sendBtn');
-  const $newRoomName = document.getElementById('newRoomName');
-  const $doCreate = document.getElementById('doCreate');
-  const $joinRoomId = document.getElementById('joinRoomId');
-  const $doJoin = document.getElementById('doJoin');
-  const $closeModal = document.getElementById('closeModal');
+    <div class="messages" id="messages"></div>
 
-  // validate config
-  if (!SUPABASE_URL.includes('supabase.co') || SUPABASE_ANON_KEY.length < 20) {
-    alert('Replace SUPABASE_URL and SUPABASE_ANON_KEY at top of file.');
-    document.getElementById('roomName').textContent = '⚠️ configure keys in file';
-    return;
-  }
+    <footer>
+      <input id="messageInput" style="flex:1" placeholder="Type a message..." />
+      <button id="sendBtn">Send</button>
+    </footer>
+  </main>
 
-  // supabase factory detection
-  const factory = window.supabase ?? window.supabaseJs ?? null;
-  if (!factory) {
-    alert('Supabase SDK not loaded. Check the CDN script.');
-    return;
-  }
-  const supabase = factory.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-  window.__SUP = supabase; // debug
+  <!-- UMD build of supabase-js -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script>
+    // ====== CONFIG: replace with your Supabase values ======
+    const SUPABASE_URL = 'https://qtjgoejrrcwibpvtgbss.supabase.co'; // <- replace
+    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF0amdvZWpycmN3aWJwdnRnYnNzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzEwNjI0NTIsImV4cCI6MjA4NjYzODQ1Mn0.n2wVMIlwz1MbFOxctbuSQGfL36NGuoaOqKslZHrQQAw';            // <- replace
+    // ======================================================
 
-  // state
-  let ROOM_ID = null;
-  let ROOM_NAME = null;
-  let realtimeChannel = null;
-  let fallbackPollId = null;
+    // create client (UMD exports a global 'supabase' object)
+    const { createClient } = supabase;
+    const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-  // helpers
-  const esc = s => String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
-  const timeFmt = ts => ts ? new Date(ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '';
+    // UI refs
+    const roomsEl = document.getElementById('rooms');
+    const createRoomBtn = document.getElementById('createRoomBtn');
+    const newRoomName = document.getElementById('newRoomName');
+    const usernameInput = document.getElementById('username');
+    const messagesEl = document.getElementById('messages');
+    const roomTitle = document.getElementById('roomTitle');
+    const messageInput = document.getElementById('messageInput');
+    const sendBtn = document.getElementById('sendBtn');
+    const inviteBox = document.getElementById('inviteBox');
 
-  function appendMessage(row, isYou=false){
-    const wrap = document.createElement('div');
-    wrap.className = 'message ' + (isYou ? 'you' : 'other');
-    const meta = document.createElement('div');
-    meta.className = 'meta';
-    meta.innerText = `${row.username || 'anon'} • ${timeFmt(row.inserted_at)}`;
-    const body = document.createElement('div');
-    body.innerHTML = esc(row.content);
-    wrap.appendChild(meta);
-    wrap.appendChild(body);
-    $messages.appendChild(wrap);
-    wrap.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }
+    let currentRoom = null;
+    let channel = null; // realtime channel subscription handle
 
-  // load messages for room
-  async function loadRecent(){
-    if(!ROOM_ID) return;
-    try {
-      const { data, error } = await supabase
-        .from('messages')
-        .select('id,username,content,inserted_at,room_id')
-        .eq('room_id', ROOM_ID)
-        .order('inserted_at', { ascending: true })
-        .limit(500);
-      if (error) { console.error('SELECT', error); return; }
-      $messages.innerHTML = '';
-      (data || []).forEach(r => appendMessage(r, false));
-    } catch (e) { console.error('loadRecent failed', e); }
-  }
+    // utils
+    function el(tag, text, cls){ const e=document.createElement(tag); if(text) e.textContent=text; if(cls) e.className=cls; return e; }
 
-  // create room
-  async function createRoom(name){
-    try {
-      const { data, error } = await supabase
-        .from('rooms')
-        .insert([{ name: name || null }])
-        .select()
-        .single();
-      if (error) { console.error('create room error', error); return null; }
-      return data;
-    } catch (e) { console.error('createRoom threw', e); return null; }
-  }
-
-  // join with room id (or full url)
-  async function joinRoomByInput(raw){
-    if(!raw) return;
-    // accept full URL or just id
-    try {
-      let id = raw.trim();
-      if (id.includes('?')) {
-        const u = new URL(id, location.href);
-        id = u.searchParams.get('room') ?? id;
-      }
-      // verify room exists
-      const { data, error } = await supabase.from('rooms').select('id,name').eq('id', id).maybeSingle();
-      if (error) { console.error('verify room', error); alert('Error verifying room'); return; }
-      if (!data) { alert('Room not found'); return; }
-      ROOM_ID = data.id; ROOM_NAME = data.name || ('Room ' + ROOM_ID.slice(0,6));
-      onEnterRoom();
-      history.replaceState(null, '', '?room=' + ROOM_ID);
-    } catch (e) { console.error('joinRoomByInput', e); }
-  }
-
-  // send message
-  async function sendMessage(e){
-    if (e) e.preventDefault();
-    if (!ROOM_ID) { alert('No room selected'); return; }
-    const content = $message.value.trim();
-    const username = $username.value.trim() || 'anon';
-    if (!content) return;
-    $sendBtn.disabled = true;
-    try {
-      const { data, error } = await supabase.from('messages').insert([{ room_id: ROOM_ID, username, content }]);
-      if (error) { console.error('insert', error); alert('Send failed'); }
-      // if realtime arrives it will append; otherwise optimistic append
-      if(!isRealtimeOpen()){
-        (data||[]).forEach(r => appendMessage(r, true));
-      }
-      $message.value = '';
-      $message.focus();
-    } catch (e) { console.error('sendMessage', e); alert('Send error'); }
-    finally { $sendBtn.disabled = false; }
-  }
-
-  // realtime subscribe (filter by room)
-  function subscribeRealtime(){
-    if(!ROOM_ID) return;
-    try {
-      realtimeChannel = supabase
-        .channel('public:messages')
-        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `room_id=eq.${ROOM_ID}` }, payload => {
-          appendMessage(payload.new, false);
-        });
-      realtimeChannel.subscribe().then(res => {
-        console.log('subscribe result', res);
-        checkConnectedAndStopFallback();
-      }).catch(err => {
-        console.warn('subscribe fail', err);
-        startFallbackPolling();
+    // load rooms
+    async function loadRooms(){
+      const { data, error } = await sb.from('rooms').select('*').order('created_at', { ascending: false }).limit(100);
+      if (error) { console.error(error); return; }
+      roomsEl.innerHTML = '';
+      data.forEach(r => {
+        const b = el('div', r.name + ' ');
+        const joinBtn = document.createElement('button');
+        joinBtn.textContent = 'Join';
+        joinBtn.onclick = () => joinRoom(r);
+        b.appendChild(joinBtn);
+        roomsEl.appendChild(b);
       });
-    } catch (e) {
-      console.error('subscribeRealtime threw', e);
-      startFallbackPolling();
     }
-    // if still not joined in 4s, start polling
-    setTimeout(() => { if(!isRealtimeOpen()) startFallbackPolling(); }, 4000);
-  }
 
-  function isRealtimeOpen(){
-    try {
-      const channels = supabase?.getChannels?.();
-      if(!channels) return false;
-      const ch = channels.find(c => c?.topic?.includes('public:messages') || c?.topic === 'realtime:public:messages');
-      if(!ch) return false;
-      return ch.state === 'joined' || ch.state === 'joining';
-    } catch(e){ return false; }
-  }
-
-  function checkConnectedAndStopFallback(){
-    if(isRealtimeOpen()){
-      if(fallbackPollId){ clearInterval(fallbackPollId); fallbackPollId = null; console.log('stopped fallback poll'); }
+    // create room (with invite_code)
+    async function createRoom(){
+      const name = newRoomName.value.trim();
+      if(!name) return alert('Name required');
+      // simple random token:
+      const invite_code = crypto.randomUUID();
+      const { data, error } = await sb.from('rooms').insert([{ name, invite_code }]).select().single();
+      if (error) return console.error(error);
+      newRoomName.value = '';
+      await loadRooms();
+      // join newly created room
+      joinRoom(data);
     }
-  }
 
-  function startFallbackPolling(){
-    if(fallbackPollId) return;
-    console.log('starting fallback polling');
-    fallbackPollId = setInterval(() => loadRecent(), 3000);
-  }
-
-  // UI actions for entering/exiting a room
-  async function onEnterRoom(){
-    $roomName.textContent = ROOM_NAME ? ROOM_NAME : ('Room ' + ROOM_ID.slice(0,6));
-    $modal.style.display = 'none';
-    $messages.innerHTML = '';
-    await loadRecent();
-    subscribeRealtime();
-  }
-
-  function onLeaveRoom(){
-    ROOM_ID = null; ROOM_NAME = null;
-    $roomName.textContent = '';
-    $messages.innerHTML = '';
-    history.replaceState(null, '', location.pathname);
-    try { realtimeChannel?.unsubscribe(); } catch(e){}
-    realtimeChannel = null;
-    if(fallbackPollId){ clearInterval(fallbackPollId); fallbackPollId = null; }
-    $modal.style.display = 'flex';
-  }
-
-  // invite helpers
-  function inviteUrl(){
-    if(!ROOM_ID) return '';
-    return location.origin + location.pathname + '?room=' + ROOM_ID;
-  }
-  async function copyInvite(){
-    const url = inviteUrl();
-    if(!url) return alert('No room to invite to');
-    try { await navigator.clipboard.writeText(url); alert('Copied invite link'); }
-    catch(e){ prompt('Copy this link', url); }
-  }
-  async function shareInvite(){
-    const url = inviteUrl();
-    if(!url) return alert('No room');
-    if (navigator.share) {
-      try { await navigator.share({ title: ROOM_NAME || 'Chat room', text: 'Join my room', url }); }
-      catch(e){ console.log('share canceled'); }
-    } else { copyInvite(); }
-  }
-
-  // wire UI
-  $createRoomBtn.addEventListener('click', ()=> $modal.style.display = 'flex');
-  $closeModal.addEventListener('click', ()=> $modal.style.display = 'none');
-  $doCreate.addEventListener('click', async (e) => {
-    e.preventDefault();
-    const name = $newRoomName.value.trim() || null;
-    const room = await createRoom(name);
-    if(room){ ROOM_ID = room.id; ROOM_NAME = room.name || ('Room ' + ROOM_ID.slice(0,6)); onEnterRoom(); history.replaceState(null,'','?room=' + ROOM_ID); }
-  });
-  $doJoin.addEventListener('click', async (e)=> { e.preventDefault(); await joinRoomByInput($joinRoomId.value); });
-  $copyInviteBtn.addEventListener('click', copyInvite);
-  $shareBtn.addEventListener('click', shareInvite);
-  $leaveBtn.addEventListener('click', ()=> { if(confirm('Leave room?')) onLeaveRoom(); });
-
-  $composer.addEventListener('submit', sendMessage);
-  $message.addEventListener('keydown', (e) => { if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendMessage(); }});
-
-  // on load: if ?room=... in url, auto-join; otherwise show modal
-  (async ()=>{
-    const params = new URLSearchParams(location.search);
-    const roomParam = params.get('room');
-    if (roomParam) {
-      // try verify and join
-      try {
-        const { data, error } = await supabase.from('rooms').select('id,name').eq('id', roomParam).maybeSingle();
-        if (error) { console.error('verify room', error); $modal.style.display = 'flex'; return; }
-        if (!data) { alert('Room not found'); $modal.style.display = 'flex'; return; }
-        ROOM_ID = data.id; ROOM_NAME = data.name || ('Room ' + ROOM_ID.slice(0,6)); onEnterRoom();
-      } catch (e) { console.error(e); $modal.style.display = 'flex'; }
-    } else {
-      $modal.style.display = 'flex';
+    // build invite link
+    function inviteLinkFor(room){
+      // using query params: ?rid=<room.id>&token=<invite_code>
+      const url = new URL(window.location.href);
+      url.searchParams.set('rid', room.id);
+      if (room.invite_code) url.searchParams.set('token', room.invite_code);
+      return url.toString();
     }
-  })();
 
-  // expose for debugging
-  window.roomsChat = { supabase, loadRecent, createRoom, joinRoomByInput, inviteUrl, onLeaveRoom };
-})();
-</script>
+    // join a room: shows messages and subscribes to realtime inserts
+    async function joinRoom(room){
+      // teardown existing channel if any
+      if(channel) {
+        try { await sb.removeChannel(channel); } catch(e){ /* ignore */ }
+        channel = null;
+      }
+
+      currentRoom = room;
+      roomTitle.textContent = room.name;
+      inviteBox.innerHTML = '';
+      const inv = el('div', 'Invite link:', 'small');
+      const linkdiv = el('div', inviteLinkFor(room), 'invite');
+      inviteBox.appendChild(inv);
+      inviteBox.appendChild(linkdiv);
+
+      // load last messages
+      const { data, error } = await sb.from('messages').select('*').eq('room_id', room.id).order('created_at', { ascending: true }).limit(200);
+      if (error){ console.error(error); return; }
+      messagesEl.innerHTML = '';
+      data.forEach(addMessageToUI);
+
+      // subscribe to realtime INSERTS on messages for this room
+      channel = sb.channel('room-' + room.id)
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: 'room_id=eq.' + room.id },
+          (payload) => {
+            addMessageToUI(payload.new);
+          })
+        .subscribe();
+    }
+
+    function addMessageToUI(msg){
+      const d = el('div', '', 'msg');
+      const time = new Date(msg.created_at).toLocaleTimeString();
+      d.innerHTML = `<strong>${escapeHtml(msg.username)}</strong> <span class="small">${time}</span><div>${escapeHtml(msg.content)}</div>`;
+      messagesEl.appendChild(d);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    // send message
+    async function sendMessage(){
+      if(!currentRoom) return alert('Join a room first');
+      const content = messageInput.value.trim();
+      const username = (usernameInput.value || 'Anon').trim();
+      if(!content) return;
+      const { error } = await sb.from('messages').insert([{ room_id: currentRoom.id, username, content }]);
+      if (error) {
+        console.error(error);
+        alert('Error sending message');
+      } else {
+        messageInput.value = '';
+      }
+    }
+
+    // small helper
+    function escapeHtml(s){ return (''+s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
+
+    // parse URL to auto-join room if invite present
+    async function tryJoinFromUrl(){
+      const params = new URLSearchParams(window.location.search);
+      const rid = params.get('rid');
+      const token = params.get('token');
+      if (!rid) return;
+      // fetch room: if invite_code exists, check token matches (simple client-side check)
+      const { data, error } = await sb.from('rooms').select('*').eq('id', rid).single();
+      if (error || !data) return console.warn('room not found or error', error);
+      if (data.invite_code && token && token !== data.invite_code){
+        alert('Invalid invite token');
+        return;
+      }
+      // join
+      joinRoom(data);
+    }
+
+    // attach handlers
+    createRoomBtn.onclick = createRoom;
+    sendBtn.onclick = sendMessage;
+    messageInput.addEventListener('keydown', (e)=> { if(e.key === 'Enter') sendMessage(); });
+
+    // initial load
+    (async ()=> {
+      await loadRooms();
+      await tryJoinFromUrl();
+    })();
+
+    // refresh room list periodically (or you can add a subscription to rooms table)
+    setInterval(loadRooms, 15000);
+  </script>
 </body>
 </html>
