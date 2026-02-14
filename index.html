@@ -3,202 +3,669 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Yap</title>
+  <title>Supabase Chat — Single-file PWA</title>
+  <meta name="theme-color" content="#0b84ff"/>
   <style>
-    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; height: 100vh; display:flex; }
-    aside { width: 300px; border-right:1px solid #eee; padding: 16px; box-sizing:border-box; }
-    main { flex:1; display:flex; flex-direction:column; }
-    .room-list { max-height: 40vh; overflow:auto; margin-bottom: 12px; }
-    .messages { flex:1; padding: 16px; overflow:auto; background:#fafafa; }
-    .msg { margin-bottom:8px; }
-    footer { display:flex; padding:8px; border-top:1px solid #eee; }
-    input, button, textarea { font:inherit; }
-    .small { font-size: 0.9rem; color:#666 }
-    .invite { word-break:break-all; background:#f3f6ff; padding:8px; border-radius:6px; margin-top:8px; }
+    /* Minimal styling */
+    html,body{height:100%;margin:0;font-family:system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;}
+    .app{display:flex;height:100vh;}
+    aside{width:300px;border-right:1px solid #eee;padding:14px;box-sizing:border-box;background:#fff;}
+    main{flex:1;display:flex;flex-direction:column;background:#fafbff;}
+    header{padding:12px;border-bottom:1px solid #eee;}
+    .messages{flex:1;padding:12px;overflow:auto;}
+    .msg{margin-bottom:8px;padding:8px;border-radius:8px;background:#fff;border:1px solid #f0f0ff;}
+    .msg .meta{font-size:0.82rem;color:#666;margin-bottom:6px;}
+    footer{display:flex;padding:8px;border-top:1px solid #eee;background:#fff;}
+    input,textarea,button{font:inherit;padding:8px;border:1px solid #ddd;border-radius:6px}
+    input{width:100%}
+    button{background:#0b84ff;color:#fff;border:none}
+    .small{font-size:0.85rem;color:#666}
+    .invite{word-break:break-all;background:#f3f6ff;padding:8px;border-radius:6px;margin-top:8px}
+    .sqlbox{font-family:monospace;font-size:13px;height:220px;width:100%;box-sizing:border-box}
+    .controls{display:flex;gap:8px;margin-top:8px}
+    .offline{color:#b22}
+    .typing{font-size:0.9rem;color:#777;margin:8px 12px}
   </style>
 </head>
 <body>
-  <aside>
-    <h3>Rooms</h3>
-    <div>
-      <input id="newRoomName" placeholder="New room name" />
-      <button id="createRoomBtn">Create</button>
-    </div>
-    <div class="room-list" id="rooms"></div>
-    <div style="margin-top:12px">
-      <div class="small">Current User</div>
-      <input id="username" placeholder="your name" />
-    </div>
-    <div id="inviteBox" style="margin-top:12px"></div>
-  </aside>
+  <div class="app">
+    <aside>
+      <h3>Rooms</h3>
+      <div style="display:flex;gap:8px;">
+        <input id="newRoomName" placeholder="New room name" />
+        <button id="createRoomBtn">Create</button>
+      </div>
 
-  <main>
-    <header style="padding:12px;border-bottom:1px solid #eee">
-      <strong id="roomTitle">No room selected</strong>
-    </header>
+      <div id="rooms" style="margin-top:10px;max-height:28vh;overflow:auto"></div>
 
-    <div class="messages" id="messages"></div>
+      <div style="margin-top:12px">
+        <div class="small">Account (magic link)</div>
+        <div id="authBox">
+          <input id="email" placeholder="your@gmail.com" />
+          <div class="controls">
+            <button id="magicBtn">Send Magic Link</button>
+            <div id="authStatus" class="small" style="align-self:center"></div>
+          </div>
+        </div>
 
-    <footer>
-      <input id="messageInput" style="flex:1" placeholder="Type a message..." />
-      <button id="sendBtn">Send</button>
-    </footer>
-  </main>
+        <div id="profile" style="display:none;margin-top:8px">
+          <div>
+            <input id="displayName" placeholder="Display name" />
+            <button id="saveProfile">Save</button>
+          </div>
+          <div class="small" id="signedInAs"></div>
+          <div style="margin-top:6px"><button id="signOutBtn">Sign out</button></div>
+        </div>
+      </div>
 
-  <!-- UMD build of supabase-js -->
+      <div id="inviteBox" style="margin-top:12px"></div>
+
+      <div style="margin-top:12px">
+        <div class="small">Status: <span id="netStatus"></span></div>
+      </div>
+
+      <hr style="margin:12px 0" />
+      <div class="small">SQL migrations (copy & paste to Supabase SQL editor)</div>
+      <textarea id="sql" class="sqlbox" readonly></textarea>
+      <div class="controls" style="margin-top:6px">
+        <button id="copySqlBtn">Copy SQL</button>
+        <button id="runSafetyNote" title="Don't run from the browser — paste into Supabase SQL editor">Run in Supabase</button>
+      </div>
+    </aside>
+
+    <main>
+      <header>
+        <strong id="roomTitle">No room selected</strong>
+        <div id="pinned" class="small"></div>
+      </header>
+
+      <div class="messages" id="messages">Select or create a room to start.</div>
+
+      <div class="typing" id="typingIndicator"></div>
+
+      <footer>
+        <input id="messageInput" placeholder="Type a message... (Enter to send)" />
+        <button id="sendBtn">Send</button>
+      </footer>
+    </main>
+  </div>
+
+  <!-- Supabase UMD -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
   <script>
-    // ====== CONFIG: replace with your Supabase values ======
-    const SUPABASE_URL = 'https://qtjgoejrrcwibpvtgbss.supabase.co'; // <- replace
-    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF0amdvZWpycmN3aWJwdnRnYnNzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzEwNjI0NTIsImV4cCI6MjA4NjYzODQ1Mn0.n2wVMIlwz1MbFOxctbuSQGfL36NGuoaOqKslZHrQQAw';            // <- replace
-    // ======================================================
+  /************************************************************************
+   * CONFIG: replace the two placeholders with your Supabase project info
+   ************************************************************************/
+  const SUPABASE_URL = 'https://YOUR-PROJECT.supabase.co'; // <-- REPLACE
+  const SUPABASE_ANON_KEY = 'PUBLIC-ANON-KEY';            // <-- REPLACE
 
-    // create client (UMD exports a global 'supabase' object)
-    const { createClient } = supabase;
-    const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  /************************************************************************
+   * SQL MIGRATIONS (run these in Supabase SQL editor). This fixed version
+   * ensures messages.created_by exists before any policy or code references it.
+   ************************************************************************/
+  const SQL = `-- Enable uuid generator (if not already)
+create extension if not exists "pgcrypto";
 
-    // UI refs
-    const roomsEl = document.getElementById('rooms');
-    const createRoomBtn = document.getElementById('createRoomBtn');
-    const newRoomName = document.getElementById('newRoomName');
-    const usernameInput = document.getElementById('username');
-    const messagesEl = document.getElementById('messages');
-    const roomTitle = document.getElementById('roomTitle');
-    const messageInput = document.getElementById('messageInput');
-    const sendBtn = document.getElementById('sendBtn');
-    const inviteBox = document.getElementById('inviteBox');
+-- ROOMS table (create if not exists)
+create table if not exists public.rooms (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  invite_code text,
+  created_by text,
+  created_at timestamptz default now()
+);
 
-    let currentRoom = null;
-    let channel = null; // realtime channel subscription handle
+-- MESSAGES table: add missing columns (quiet if already present)
+create table if not exists public.messages (
+  id uuid primary key default gen_random_uuid(),
+  room_id uuid not null references public.rooms(id) on delete cascade,
+  username text not null,
+  content text not null,
+  created_at timestamptz default now(),
+  created_by text,         -- store auth.uid() here (text)
+  edited_at timestamptz,
+  deleted boolean default false
+);
 
-    // utils
-    function el(tag, text, cls){ const e=document.createElement(tag); if(text) e.textContent=text; if(cls) e.className=cls; return e; }
+-- USERS table
+create table if not exists public.users (
+  id uuid primary key default gen_random_uuid(),
+  auth_uid text unique,
+  email text,
+  display_name text,
+  last_active timestamptz default now()
+);
 
-    // load rooms
-    async function loadRooms(){
-      const { data, error } = await sb.from('rooms').select('*').order('created_at', { ascending: false }).limit(100);
-      if (error) { console.error(error); return; }
-      roomsEl.innerHTML = '';
-      data.forEach(r => {
-        const b = el('div', r.name + ' ');
-        const joinBtn = document.createElement('button');
-        joinBtn.textContent = 'Join';
-        joinBtn.onclick = () => joinRoom(r);
-        b.appendChild(joinBtn);
-        roomsEl.appendChild(b);
-      });
+-- Message reactions
+create table if not exists public.message_reactions (
+  id uuid primary key default gen_random_uuid(),
+  message_id uuid not null references public.messages(id) on delete cascade,
+  auth_uid text not null,
+  emoji text not null,
+  created_at timestamptz default now(),
+  unique(message_id, auth_uid, emoji)
+);
+
+-- Room members (optional for restricted rooms)
+create table if not exists public.room_members (
+  room_id uuid references public.rooms(id) on delete cascade,
+  auth_uid text not null,
+  role text default 'member',
+  primary key (room_id, auth_uid)
+);
+
+-- Indexes
+create index if not exists msg_room_created_idx on public.messages(room_id, created_at);
+create index if not exists reactions_msg_idx on public.message_reactions(message_id);
+
+-- Enable row level security (RLS) and create sample policies:
+alter table public.messages enable row level security;
+alter table public.rooms enable row level security;
+alter table public.message_reactions enable row level security;
+
+-- Allow anyone to select rooms (but we recommend preventing SELECT of invite_code by hiding that column via a view or function)
+create policy "public_select_rooms" on public.rooms
+  for select
+  using (true);
+
+-- Messages: only authenticated users may insert (requires auth.uid())
+create policy "insert_messages_auth" on public.messages
+  for insert
+  with check (auth.uid() IS NOT NULL);
+
+-- Allow selects on messages (adjust to require membership if desired)
+create policy "select_messages_public" on public.messages
+  for select
+  using (true);
+
+-- Allow message updates only by creator (who is stored in created_by)
+create policy "update_own_messages" on public.messages
+  for update
+  using (auth.uid() = created_by)
+  with check (auth.uid() = created_by);
+
+-- Reactions: authenticated inserts only, selects allowed
+create policy "insert_reactions_auth" on public.message_reactions
+  for insert
+  with check (auth.uid() IS NOT NULL);
+
+-- (Optional) Prevent clients from reading rooms.invite_code: 
+-- For stronger security, create a view that excludes invite_code for unauthenticated users
+-- or create an Edge Function to validate invite tokens server-side.`;
+
+
+  // Put SQL into textarea for easy copy
+  document.getElementById('sql').value = SQL;
+
+  document.getElementById('copySqlBtn').onclick = ()=>{
+    navigator.clipboard.writeText(SQL).then(()=> alert('SQL copied — paste into Supabase SQL editor.'));
+  };
+
+  document.getElementById('runSafetyNote').onclick = ()=>{
+    alert('Open your Supabase project → SQL Editor → paste the SQL and run it. Do not run DB migrations from random websites.');
+  };
+
+  // Create Supabase client
+  const { createClient } = supabase;
+  const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    realtime: { params: { events_per_second: 25 } }
+  });
+
+  // UI refs
+  const roomsEl = document.getElementById('rooms');
+  const createRoomBtn = document.getElementById('createRoomBtn');
+  const newRoomName = document.getElementById('newRoomName');
+  const messagesEl = document.getElementById('messages');
+  const roomTitle = document.getElementById('roomTitle');
+  const messageInput = document.getElementById('messageInput');
+  const sendBtn = document.getElementById('sendBtn');
+  const inviteBox = document.getElementById('inviteBox');
+  const typingIndicator = document.getElementById('typingIndicator');
+  const netStatusEl = document.getElementById('netStatus');
+
+  // auth UI
+  const emailInput = document.getElementById('email');
+  const magicBtn = document.getElementById('magicBtn');
+  const authStatus = document.getElementById('authStatus');
+  const profileWrap = document.getElementById('profile');
+  const authBox = document.getElementById('authBox');
+  const signOutBtn = document.getElementById('signOutBtn');
+  const displayNameInput = document.getElementById('displayName');
+  const saveProfileBtn = document.getElementById('saveProfile');
+  const signedInAs = document.getElementById('signedInAs');
+
+  let currentRoom = null;
+  let messageChannel = null;
+  let reactionChannel = null;
+  let typingTimeout = null;
+  let me = null; // auth user object
+
+  /***********************
+   * Utility helpers
+   ***********************/
+  function el(tag, text, cls){ const e=document.createElement(tag); if(text) e.textContent=text; if(cls) e.className=cls; return e; }
+  function escapeHtml(s){ return (''+s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
+  function nowISO(){ return new Date().toISOString(); }
+
+  // local caching & outbox
+  function cacheMessagesForRoom(roomId, msgs){
+    try{ localStorage.setItem('msgs:'+roomId, JSON.stringify(msgs)); } catch(e){}
+  }
+  function loadCachedMessages(roomId){
+    try{ const v = localStorage.getItem('msgs:'+roomId); return v ? JSON.parse(v) : null; } catch(e){ return null; }
+  }
+  function pushToOutbox(item){
+    const key = 'outbox';
+    const arr = JSON.parse(localStorage.getItem(key) || '[]');
+    arr.push(item);
+    localStorage.setItem(key, JSON.stringify(arr));
+  }
+  async function flushOutbox(){
+    if (!navigator.onLine) return;
+    const key = 'outbox';
+    const arr = JSON.parse(localStorage.getItem(key) || '[]');
+    if (!arr.length) return;
+    for (const item of arr.slice()){
+      try {
+        await sb.from('messages').insert([item]);
+        arr.shift();
+      } catch(e){ console.warn('outbox send error', e); break; }
     }
+    localStorage.setItem(key, JSON.stringify(arr));
+  }
 
-    // create room (with invite_code)
-    async function createRoom(){
-      const name = newRoomName.value.trim();
-      if(!name) return alert('Name required');
-      // simple random token:
-      const invite_code = crypto.randomUUID();
-      const { data, error } = await sb.from('rooms').insert([{ name, invite_code }]).select().single();
-      if (error) return console.error(error);
+  /***********************
+   * Rooms & messages
+   ***********************/
+  async function loadRooms(){
+    const { data, error } = await sb.from('rooms').select('id,name,created_at,invite_code').order('created_at',{ascending:false}).limit(200);
+    if (error) { console.error(error); return; }
+    roomsEl.innerHTML='';
+    data.forEach(r=>{
+      const row = el('div','');
+      const name = el('span', r.name + ' ');
+      const join = document.createElement('button');
+      join.textContent='Join';
+      join.style.marginLeft = '8px';
+      join.onclick = ()=> joinRoom(r);
+      row.appendChild(name);
+      row.appendChild(join);
+      roomsEl.appendChild(row);
+    });
+  }
+
+  async function createRoom(){
+    const name = newRoomName.value.trim();
+    if(!name) return alert('Name required');
+    const invite_code = crypto.randomUUID();
+    const created_by = me ? me.id : null;
+    const payload = { name, invite_code, created_by };
+    try {
+      const { data, error } = await sb.from('rooms').insert([payload]).select().single();
+      if (error) throw error;
       newRoomName.value = '';
       await loadRooms();
-      // join newly created room
       joinRoom(data);
-    }
+    } catch(e){ console.error(e); alert('Could not create room'); }
+  }
 
-    // build invite link
-    function inviteLinkFor(room){
-      // using query params: ?rid=<room.id>&token=<invite_code>
-      const url = new URL(window.location.href);
-      url.searchParams.set('rid', room.id);
-      if (room.invite_code) url.searchParams.set('token', room.invite_code);
-      return url.toString();
-    }
+  function inviteLinkFor(room){
+    const url = new URL(window.location.href);
+    url.searchParams.set('rid', room.id);
+    if (room.invite_code) url.searchParams.set('token', room.invite_code);
+    return url.toString();
+  }
 
-    // join a room: shows messages and subscribes to realtime inserts
-    async function joinRoom(room){
-      // teardown existing channel if any
-      if(channel) {
-        try { await sb.removeChannel(channel); } catch(e){ /* ignore */ }
-        channel = null;
-      }
+  async function joinRoom(room){
+    // teardown previous subscriptions
+    if (messageChannel) { try { await sb.removeChannel(messageChannel);} catch(e){} messageChannel=null; }
+    if (reactionChannel) { try { await sb.removeChannel(reactionChannel);} catch(e){} reactionChannel=null; }
 
-      currentRoom = room;
-      roomTitle.textContent = room.name;
-      inviteBox.innerHTML = '';
-      const inv = el('div', 'Invite link:', 'small');
-      const linkdiv = el('div', inviteLinkFor(room), 'invite');
-      inviteBox.appendChild(inv);
-      inviteBox.appendChild(linkdiv);
+    currentRoom = room;
+    roomTitle.textContent = room.name;
+    inviteBox.innerHTML = '';
+    const inv = el('div','Invite link:','small');
+    const linkdiv = el('div', inviteLinkFor(room), 'invite');
+    inviteBox.appendChild(inv); inviteBox.appendChild(linkdiv);
 
-      // load last messages
-      const { data, error } = await sb.from('messages').select('*').eq('room_id', room.id).order('created_at', { ascending: true }).limit(200);
-      if (error){ console.error(error); return; }
+    // show cached messages if any
+    const cached = loadCachedMessages(room.id);
+    if (cached && cached.length){
       messagesEl.innerHTML = '';
-      data.forEach(addMessageToUI);
-
-      // subscribe to realtime INSERTS on messages for this room
-      channel = sb.channel('room-' + room.id)
-        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: 'room_id=eq.' + room.id },
-          (payload) => {
-            addMessageToUI(payload.new);
-          })
-        .subscribe();
+      cached.forEach(addMessageToUI);
     }
 
-    function addMessageToUI(msg){
-      const d = el('div', '', 'msg');
-      const time = new Date(msg.created_at).toLocaleTimeString();
-      d.innerHTML = `<strong>${escapeHtml(msg.username)}</strong> <span class="small">${time}</span><div>${escapeHtml(msg.content)}</div>`;
-      messagesEl.appendChild(d);
-      messagesEl.scrollTop = messagesEl.scrollHeight;
+    // fetch messages
+    const { data, error } = await sb.from('messages').select('*').eq('room_id', room.id).order('created_at',{ascending:true}).limit(200);
+    if (error){ console.error(error); return; }
+    cacheMessagesForRoom(room.id, data);
+    messagesEl.innerHTML = '';
+    data.forEach(addMessageToUI);
+
+    // subscribe to messages (postgres changes)
+    messageChannel = sb.channel('room-' + room.id)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: 'room_id=eq.' + room.id },
+        payload => {
+          addMessageToUI(payload.new);
+          if (document.hidden && (!me || payload.new.created_by !== me.id)) showNotification(payload.new);
+        })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: 'room_id=eq.' + room.id },
+        payload => refreshMessageUI(payload.new))
+      .on('broadcast', { event: 'typing' }, (payload)=> handleTypingBroadcast(payload))
+      .subscribe();
+
+    // subscribe to reactions (global; we'll refresh UI for visible messages)
+    reactionChannel = sb.channel('reactions')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'message_reactions' }, payload => {
+        refreshReactionsForMessage(payload.new.message_id);
+      })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'message_reactions' }, payload => {
+        refreshReactionsForMessage(payload.old.message_id);
+      })
+      .subscribe();
+
+    await flushOutbox();
+  }
+
+  function addMessageToUI(msg){
+    // if a message with same id already exists, refresh it
+    let wrapper = document.querySelector(`[data-msg-id="${msg.id}"]`);
+    const createdTime = new Date(msg.created_at).toLocaleTimeString();
+    const author = escapeHtml(msg.username || 'Anon');
+    const bodyHtml = msg.deleted ? '<i>(deleted)</i>' : escapeHtml(msg.content);
+    if (!wrapper) {
+      wrapper = el('div','', 'msg');
+      wrapper.dataset.msgId = msg.id;
+      messagesEl.appendChild(wrapper);
     }
-
-    // send message
-    async function sendMessage(){
-      if(!currentRoom) return alert('Join a room first');
-      const content = messageInput.value.trim();
-      const username = (usernameInput.value || 'Anon').trim();
-      if(!content) return;
-      const { error } = await sb.from('messages').insert([{ room_id: currentRoom.id, username, content }]);
-      if (error) {
-        console.error(error);
-        alert('Error sending message');
-      } else {
-        messageInput.value = '';
-      }
-    }
-
-    // small helper
-    function escapeHtml(s){ return (''+s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
-
-    // parse URL to auto-join room if invite present
-    async function tryJoinFromUrl(){
-      const params = new URLSearchParams(window.location.search);
-      const rid = params.get('rid');
-      const token = params.get('token');
-      if (!rid) return;
-      // fetch room: if invite_code exists, check token matches (simple client-side check)
-      const { data, error } = await sb.from('rooms').select('*').eq('id', rid).single();
-      if (error || !data) return console.warn('room not found or error', error);
-      if (data.invite_code && token && token !== data.invite_code){
-        alert('Invalid invite token');
-        return;
-      }
-      // join
-      joinRoom(data);
-    }
-
+    wrapper.innerHTML = `
+      <div class="meta"><strong>${author}</strong> <span class="small">${createdTime}${msg.edited_at ? ' • edited' : ''}</span>
+      <span style="float:right">
+        ${me ? `<button data-act="react" title="React" style="margin-right:6px">❤️</button>` : ''}
+        ${me && msg.created_by === me.id ? `<button data-act="edit">Edit</button> <button data-act="del">Delete</button>` : ''}
+      </span>
+      </div>
+      <div class="body">${bodyHtml}</div>
+      <div class="msg-reactions small" data-reactions-for="${msg.id}"></div>`;
     // attach handlers
-    createRoomBtn.onclick = createRoom;
-    sendBtn.onclick = sendMessage;
-    messageInput.addEventListener('keydown', (e)=> { if(e.key === 'Enter') sendMessage(); });
+    wrapper.querySelectorAll('button').forEach(btn=>{
+      const act = btn.dataset.act;
+      if (act === 'edit') btn.onclick = ()=> startEditMessage(msg.id);
+      if (act === 'del') btn.onclick = ()=> toggleDeleteMessage(msg.id, !msg.deleted);
+      if (btn.textContent === '❤️') btn.onclick = ()=> toggleReact(msg.id, '❤️');
+    });
+    refreshReactionsForMessage(msg.id);
+    wrapper.scrollIntoView({behavior:'smooth', block:'end'});
+  }
 
-    // initial load
-    (async ()=> {
-      await loadRooms();
-      await tryJoinFromUrl();
-    })();
+  async function refreshMessageUI(msg){
+    const dom = document.querySelector(`[data-msg-id="${msg.id}"]`);
+    if (!dom) return addMessageToUI(msg);
+    const body = dom.querySelector('.body');
+    body.innerHTML = msg.deleted ? '<i>(deleted)</i>' : escapeHtml(msg.content);
+    refreshReactionsForMessage(msg.id);
+  }
 
-    // refresh room list periodically (or you can add a subscription to rooms table)
-    setInterval(loadRooms, 15000);
+  async function refreshReactionsForMessage(message_id){
+    try {
+      const { data } = await sb.from('message_reactions').select('emoji,auth_uid').eq('message_id', message_id);
+      const container = document.querySelector(`[data-reactions-for="${message_id}"]`);
+      if (!container) return;
+      const counts = {};
+      data.forEach(r => counts[r.emoji] = (counts[r.emoji] || 0) + 1);
+      container.innerHTML = Object.entries(counts).map(([e,c]) => `${escapeHtml(e)} ${c}`).join(' • ');
+    } catch(e){ /* ignore */ }
+  }
+
+  async function toggleReact(message_id, emoji){
+    if (!me) return alert('Sign in to react');
+    try {
+      const { data } = await sb.from('message_reactions').select('*').match({ message_id, auth_uid: me.id, emoji }).limit(1).single();
+      if (data) {
+        await sb.from('message_reactions').delete().match({ id: data.id });
+      } else {
+        await sb.from('message_reactions').insert([{ message_id, auth_uid: me.id, emoji }]);
+      }
+    } catch(e){ console.warn('toggleReact', e); }
+  }
+
+  function startEditMessage(messageId){
+    const dom = document.querySelector(`[data-msg-id="${messageId}"]`);
+    if (!dom) return;
+    const body = dom.querySelector('.body');
+    const original = body.textContent;
+    const ta = document.createElement('textarea'); ta.value = original; ta.style.width='100%';
+    const ok = document.createElement('button'); ok.textContent='Save';
+    const cancel = document.createElement('button'); cancel.textContent='Cancel';
+    body.innerHTML = ''; body.appendChild(ta); body.appendChild(ok); body.appendChild(cancel);
+    ok.onclick = async ()=>{
+      const newText = ta.value.trim();
+      if(!newText) return alert('Empty message');
+      try { await sb.from('messages').update({ content: newText, edited_at: nowISO() }).eq('id', messageId); } catch(e){ console.warn(e); alert('Could not update'); }
+    };
+    cancel.onclick = ()=> { body.textContent = original; };
+  }
+
+  async function toggleDeleteMessage(messageId, setDeleted){
+    if (!confirm(setDeleted ? 'Delete message?' : 'Undo delete?')) return;
+    try { await sb.from('messages').update({ deleted: setDeleted }).eq('id', messageId); } catch(e){ console.warn(e); }
+  }
+
+  async function sendMessage(){
+    if (!currentRoom) return alert('Join a room first');
+    const content = messageInput.value.trim();
+    if (!content) return;
+    const payload = {
+      room_id: currentRoom.id,
+      content,
+      username: me ? (displayNameInput.value || me.email || 'Anon') : 'Anon',
+      created_at: nowISO(),
+      created_by: me ? me.id : null
+    };
+    messageInput.value = '';
+    if (!navigator.onLine){
+      pushToOutbox(payload);
+      addMessageToUI({...payload, id: 'local-'+Date.now()});
+      return;
+    }
+    try {
+      await sb.from('messages').insert([payload]);
+    } catch(e){
+      console.warn('send error', e);
+      pushToOutbox(payload);
+    }
+  }
+
+  /***********************
+   * Typing indicator (broadcast)
+   ***********************/
+  function startTyping(){
+    if(!messageChannel) return;
+    const name = me ? (displayNameInput.value || me.email) : 'Anon';
+    messageChannel.send({ type: 'broadcast', event: 'typing', payload: { user: name, ts: Date.now() } }).catch(()=>{});
+  }
+
+  function handleTypingBroadcast(payload){
+    const who = payload.payload?.user || 'Someone';
+    typingIndicator.textContent = who + ' is typing...';
+    if (typingTimeout) clearTimeout(typingTimeout);
+    typingTimeout = setTimeout(()=> typingIndicator.textContent = '', 1800);
+  }
+
+  /***********************
+   * Notifications
+   ***********************/
+  async function ensureNotificationPermission(){
+    if (Notification.permission === 'default') {
+      try { await Notification.requestPermission(); } catch(e){}
+    }
+  }
+  function showNotification(msg){
+    if (Notification.permission !== 'granted') return;
+    const title = `${msg.username || 'Someone'} — ${currentRoom?.name || ''}`;
+    const body = msg.content.length > 120 ? msg.content.slice(0,120)+'…' : msg.content;
+    try { new Notification(title, { body, tag: msg.room_id }); } catch(e){ console.warn('notification', e); }
+  }
+
+  /***********************
+   * Auth (magic link) + user init
+   ***********************/
+  magicBtn.onclick = async ()=>{
+    const email = (emailInput.value || '').trim();
+    if (!email) return alert('Enter an email');
+    magicBtn.disabled = true;
+    authStatus.textContent = 'Sending sign-in link…';
+    try {
+      const { error } = await sb.auth.signInWithOtp({ email });
+      if (error) throw error;
+      authStatus.textContent = 'Check your email (Gmail) for the magic link.';
+    } catch(e){ console.error(e); authStatus.textContent = 'Error sending link'; }
+    magicBtn.disabled = false;
+  };
+
+  sb.auth.onAuthStateChange(async (event, session) => {
+    if (event === 'SIGNED_IN' || event === 'USER_UPDATED') {
+      await initUser(session);
+    } else if (event === 'SIGNED_OUT') {
+      me = null;
+      profileWrap.style.display='none';
+      authBox.style.display='block';
+      authStatus.textContent = '';
+    }
+  });
+
+  async function initUser(session){
+    try {
+      const s = session ?? (await sb.auth.getSession()).data.session;
+      if (!s) return;
+      const u = s.user;
+      me = { id: u.id, email: u.email, user_metadata: u.user_metadata || {} };
+      authBox.style.display='none';
+      profileWrap.style.display='block';
+      signedInAs.textContent = 'Signed in: ' + me.email;
+      const { data } = await sb.from('users').select('*').eq('auth_uid', me.id).single();
+      if (!data) {
+        await sb.from('users').insert([{ auth_uid: me.id, email: me.email, display_name: me.user_metadata?.full_name || '' }]);
+      } else {
+        displayNameInput.value = data.display_name || (me.user_metadata?.full_name || '');
+      }
+      await sb.from('users').update({ last_active: nowISO() }).eq('auth_uid', me.id);
+    } catch(e){ console.warn('initUser', e); }
+  }
+
+  saveProfileBtn.onclick = async ()=>{
+    const val = displayNameInput.value.trim();
+    if (!me) return alert('No user');
+    try { await sb.from('users').update({ display_name: val }).eq('auth_uid', me.id); alert('Saved'); } catch(e){ console.warn(e); alert('Could not save'); }
+  };
+
+  signOutBtn.onclick = async ()=> {
+    await sb.auth.signOut();
+    me = null;
+    profileWrap.style.display='none';
+    authBox.style.display='block';
+  };
+
+  /***********************
+   * Helpers & init
+   ***********************/
+  function updateNetStatus(){ netStatusEl.textContent = navigator.onLine ? 'online' : 'offline'; if (!navigator.onLine) netStatusEl.classList.add('offline'); else netStatusEl.classList.remove('offline'); }
+  window.addEventListener('online', ()=> { updateNetStatus(); flushOutbox(); });
+  window.addEventListener('offline', updateNetStatus);
+  updateNetStatus();
+
+  // UI handlers
+  createRoomBtn.onclick = createRoom;
+  sendBtn.onclick = sendMessage;
+  messageInput.addEventListener('keydown', (e)=> { if(e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } else { startTyping(); } });
+  messageInput.addEventListener('input', ()=> startTyping());
+
+  // Attempt auto-join from URL invite
+  async function tryJoinFromUrl(){
+    const params = new URLSearchParams(window.location.search);
+    const rid = params.get('rid');
+    const token = params.get('token');
+    if (!rid) return;
+    const { data, error } = await sb.from('rooms').select('*').eq('id', rid).single();
+    if (error || !data) return console.warn('room not found or error', error);
+    if (data.invite_code && token && token !== data.invite_code){
+      alert('Invalid invite token');
+      return;
+    }
+    joinRoom(data);
+  }
+
+  // initial load
+  (async ()=>{
+    await loadRooms();
+    await tryJoinFromUrl();
+    const s = (await sb.auth.getSession()).data?.session;
+    if (s) await initUser(s);
+    ensureNotificationPermission();
+    await flushOutbox();
+  })();
+
+  /***********************
+   * Single-file PWA: manifest + service worker from blobs
+   ***********************/
+  // create and attach manifest blob
+  (function createManifest(){
+    const manifest = {
+      name: "Supabase Chat (Single-file)",
+      short_name: "Chat",
+      start_url: "/",
+      display: "standalone",
+      theme_color: "#0b84ff",
+      background_color: "#ffffff",
+      icons: []
+    };
+    const blob = new Blob([JSON.stringify(manifest)], {type: 'application/json'});
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('link');
+    link.rel = 'manifest';
+    link.href = url;
+    document.head.appendChild(link);
+  })();
+
+  // register service worker from string blob
+  (async function registerSW(){
+    if (!('serviceWorker' in navigator)) return;
+    const swCode = `
+      const CACHE_NAME = 'chat-pwa-v1';
+      const ASSETS = ['/'];
+      self.addEventListener('install', (e) => {
+        e.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS)));
+        self.skipWaiting();
+      });
+      self.addEventListener('activate', (e) => {
+        e.waitUntil(self.clients.claim());
+      });
+      self.addEventListener('fetch', (e) => {
+        if (e.request.method !== 'GET') return;
+        e.respondWith(
+          caches.match(e.request).then(cached => {
+            return cached || fetch(e.request).then(res => {
+              if (!res || res.status !== 200 || res.type !== 'basic') return res;
+              const clone = res.clone();
+              caches.open(CACHE_NAME).then(cache => cache.put(e.request, clone));
+              return res;
+            }).catch(()=> cached || new Response('Offline', { status: 503 }));
+          })
+        );
+      });
+    `;
+    try {
+      const blob = new Blob([swCode], {type: 'text/javascript'});
+      const swUrl = URL.createObjectURL(blob);
+      await navigator.serviceWorker.register(swUrl);
+      console.log('Service worker registered from blob');
+    } catch(e){ console.warn('SW register failed', e); }
+  })();
+
+  // helper: copy SQL to clipboard if user clicks the sql area too
+  document.getElementById('sql').addEventListener('click', ()=> navigator.clipboard.writeText(SQL));
+
   </script>
 </body>
 </html>
