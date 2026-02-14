@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>yap</title>
+
+<!-- Supabase UMD (works in the browser) -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+
+<style>
+  /* iPad-style overlay app, minimal & clean */
+  :root{
+    --bg:#071427;
+    --panel:#0b1b2a;
+    --muted:#9fb0c9;
+    --accent:#6bd0ff;
+    --glass: rgba(255,255,255,0.03);
+    --radius:16px;
+  }
+  html,body{height:100%;margin:0;background:linear-gradient(180deg,#021125 0%, #071427 100%);font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial;color:#e6f1fb}
+  /* center container like an app overlay */
+  .app-wrap{
+    position:fixed;
+    inset:0;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:28px;
+    -webkit-touch-callout:none;
+    -webkit-user-select:none;
+    -ms-user-select:none;
+    user-select:none;
+  }
+
+  .app {
+    width:min(920px,96vw);
+    height:min(780px,92vh);
+    background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+    border-radius:var(--radius);
+    box-shadow: 0 20px 60px rgba(2,6,23,0.6), inset 0 1px rgba(255,255,255,0.02);
+    display:grid;
+    grid-template-rows:72px 1fr 86px;
+    overflow:hidden;
+    border:1px solid rgba(255,255,255,0.03);
+  }
+
+  /* topbar */
+  .topbar{
+    padding:14px 18px;
+    display:flex;
+    align-items:center;
+    gap:12px;
+    background:linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.00));
+    border-bottom:1px solid rgba(255,255,255,0.02);
+  }
+  .brand {
+    display:flex;
+    gap:10px;
+    align-items:center;
+    font-weight:600;
+    font-size:18px;
+  }
+  .dot{
+    width:12px;height:12px;border-radius:50%;
+    background:var(--accent);
+    box-shadow:0 0 12px rgba(107,208,255,0.25);
+  }
+  .status { margin-left:auto; font-size:13px; color:var(--muted); }
+
+  /* messages area */
+  #messages-wrap { padding:14px; overflow:auto; -webkit-overflow-scrolling:touch; }
+  #messages { display:flex; flex-direction:column; gap:10px; max-height:100%; }
+  .message { max-width:78%; padding:10px 12px; border-radius:12px; line-height:1.25; }
+  .meta { font-size:12px; color:var(--muted); margin-bottom:6px; }
+  .you { align-self:flex-end; background:linear-gradient(180deg,#083a4a,#04566f); color:#eafcff; border:1px solid rgba(255,255,255,0.03); }
+  .other { align-self:flex-start; background:var(--glass); color: #dff0ff; border:1px solid rgba(255,255,255,0.02); }
+
+  /* composer */
+  .composer {
+    display:flex;
+    gap:10px;
+    padding:12px;
+    align-items:center;
+    border-top:1px solid rgba(255,255,255,0.02);
+    background:linear-gradient(180deg, rgba(255,255,255,0.00), rgba(255,255,255,0.01));
+  }
+  .composer input[type="text"]{
+    background:transparent;border:1px solid rgba(255,255,255,0.03);
+    padding:10px 12px;border-radius:10px;color:inherit;outline:none;font-size:15px;
+  }
+  .composer .flex{flex:1;display:flex;gap:8px}
+  .btn{
+    background:linear-gradient(180deg,var(--accent),#37b8db);
+    border:none;padding:10px 14px;border-radius:10px;color:#003142;font-weight:700;cursor:pointer;
+    box-shadow: 0 6px 18px rgba(59,162,201,0.15);
+  }
+  .small{font-size:13px;padding:8px 10px;border-radius:8px}
+
+  /* mobile adjustments */
+  @media (max-width:640px){
+    .app { width:100vw; height:100vh; border-radius:0; grid-template-rows:64px 1fr 72px;}
+    .message { max-width:86% }
+  }
+</style>
+</head>
+<body>
+  <div class="app-wrap" id="appWrap">
+    <div class="app" role="application" aria-label="Chat app">
+      <div class="topbar">
+        <div class="brand">
+          <div class="dot" aria-hidden="true"></div>
+          <div>Minimal Chat</div>
+        </div>
+        <div class="status" id="info">Connecting…</div>
+      </div>
+
+      <div id="messages-wrap">
+        <div id="messages" aria-live="polite"></div>
+      </div>
+
+      <form id="composer" class="composer" autocomplete="off">
+        <input id="username" type="text" placeholder="your name (optional)" class="small" style="width:150px" />
+        <div class="flex">
+          <input id="message" type="text" placeholder="Write a message…" />
+        </div>
+        <button id="sendBtn" class="btn" type="submit">Send</button>
+      </form>
+    </div>
+  </div>
+
+<script>
+/* ---------------------------
+   CONFIG — REPLACE THESE
+   ---------------------------
+   Put your project URL and anon key here.
+   Example URL: https://xyzabc123.supabase.co
+   Do NOT use service_role key in client-side code.
+*/
+const SUPABASE_URL = 'https://znksxdaundclmwxhrjgi.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inpua3N4ZGF1bmRjbG13eGhyamdpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA4MzM4ODQsImV4cCI6MjA4NjQwOTg4NH0.NXpT0LST8S3508BkMTM2tTOEUZ_eg0VTW5f2hYZ0aYc';
+/* --------------------------- */
+
+(function(){
+  // UI elements
+  const $info = document.getElementById('info');
+  const $messages = document.getElementById('messages');
+  const $form = document.getElementById('composer');
+  const $username = document.getElementById('username');
+  const $message = document.getElementById('message');
+  const $sendBtn = document.getElementById('sendBtn');
+
+  // Ensure config replaced
+  if (!SUPABASE_URL.includes('supabase.co') || SUPABASE_ANON_KEY.length < 20) {
+    $info.textContent = '⚠️ Replace SUPABASE_URL and SUPABASE_ANON_KEY at top of file';
+    console.warn('Please replace SUPABASE_URL and SUPABASE_ANON_KEY in the HTML.');
+    return;
+  }
+
+  // robust factory detection (works with either supabase or supabaseJs global)
+  const factory = window.supabase ?? window.supabaseJs ?? null;
+  if (!factory) {
+    $info.textContent = 'Supabase SDK not loaded — check CDN script.';
+    console.error('Supabase SDK not found. Ensure the CDN script is present.');
+    return;
+  }
+
+  const supabase = factory.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  window.__SUP = supabase; // handy for console debugging
+
+  // small helper
+  function esc(s){ return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
+  function timeFmt(ts){ if(!ts) return ''; try { return new Date(ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}); } catch(e){return '';} }
+
+  // append message
+  function appendMessage(row, isYou=false){
+    const wrap = document.createElement('div');
+    wrap.className = 'message ' + (isYou ? 'you' : 'other');
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.innerText = `${row.username || 'anon'} • ${timeFmt(row.inserted_at)}`;
+    const body = document.createElement('div');
+    body.innerHTML = esc(row.content);
+    wrap.appendChild(meta);
+    wrap.appendChild(body);
+    $messages.appendChild(wrap);
+    // scroll to bottom smoothly
+    wrap.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }
+
+  // load recent messages (robust)
+  async function loadRecent(){
+    $info.textContent = 'Loading messages…';
+    try {
+      const { data, error } = await supabase
+        .from('messages')
+        .select('*')
+        .order('inserted_at', { ascending: true })
+        .limit(200);
+      if (error) {
+        console.error('SELECT error', error);
+        $info.textContent = 'Error loading messages';
+        return;
+      }
+      $messages.innerHTML = '';
+      (data || []).forEach(r => appendMessage(r, false));
+      $info.textContent = 'Connected';
+    } catch (e) {
+      console.error('loadRecent failed', e);
+      $info.textContent = 'Load error';
+    }
+  }
+
+  // realtime subscription with fallback polling
+  let realtimeChannel = null;
+  let fallbackPollId = null;
+  let realtimeJoined = false;
+
+  function subscribeRealtime(){
+    try {
+      realtimeChannel = supabase
+        .channel('public:messages')
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, payload => {
+          console.log('Realtime INSERT', payload);
+          appendMessage(payload.new, false);
+        });
+      // subscribe() returns a promise-like; handle success/failure
+      realtimeChannel.subscribe({
+        onRealtimeStart: () => { console.log('Realtime start'); },
+        onRealtimeError: (e) => { console.warn('Realtime error', e); },
+        onRealtimeClose: () => { console.log('Realtime closed'); }
+      }).then(res => {
+        // the channel state is in res.state if available
+        try {
+          const state = res?.state ?? (res?.status || 'unknown');
+          console.log('subscribe result', state, res);
+        } catch(e) {}
+        // small heuristic: if connect succeeded we'll stop fallback
+        checkConnectedAndStopFallback();
+      }).catch(err => {
+        console.warn('subscribe failed', err);
+        startFallbackPolling();
+      });
+    } catch(e){
+      console.error('subscribeRealtime threw', e);
+      startFallbackPolling();
+    }
+
+    // if after 4s realtime is still not open, start fallback polling
+    setTimeout(() => {
+      if (!isRealtimeOpen()) startFallbackPolling();
+    }, 4000);
+  }
+
+  function isRealtimeOpen(){
+    try {
+      // check internal connection state if available
+      const channels = supabase?.getChannels?.();
+      if (!channels) return false;
+      // find our channel
+      const ch = channels.find(c => c?.topic?.includes('public:messages') || c?.topic === 'realtime:public:messages');
+      if (!ch) return false;
+      // channel.state may be 'joined'
+      return ch.state === 'joined' || ch.state === 'joining';
+    } catch(e){ return false; }
+  }
+
+  function checkConnectedAndStopFallback(){
+    if (isRealtimeOpen()) {
+      realtimeJoined = true;
+      if (fallbackPollId) { clearInterval(fallbackPollId); fallbackPollId = null; console.log('stopped fallback poll'); }
+    }
+  }
+
+  function startFallbackPolling(){
+    if (fallbackPollId) return;
+    console.log('starting fallback polling (every 3s)');
+    fallbackPollId = setInterval(() => {
+      loadRecent();
+    }, 3000);
+  }
+
+  // send message
+  async function sendMessage(evt){
+    if (evt) evt.preventDefault();
+    const content = $message.value.trim();
+    const username = $username.value.trim() || 'anon';
+    if (!content) return;
+    $sendBtn.disabled = true;
+    try {
+      const { data, error } = await supabase.from('messages').insert([{ username, content }]);
+      if (error) {
+        console.error('Insert error', error);
+        $info.textContent = 'Send failed';
+      } else {
+        $message.value = '';
+        $message.focus();
+        $info.textContent = 'Sent';
+        // If realtime works, the insert will flow via realtime; otherwise append optimistically:
+        if (!isRealtimeOpen()) {
+          (data || []).forEach(r => appendMessage(r, true));
+        }
+      }
+    } catch (e) {
+      console.error('sendMessage failed', e);
+      $info.textContent = 'Send error';
+    } finally {
+      $sendBtn.disabled = false;
+    }
+  }
+
+  // start: load + subscribe
+  async function start(){
+    $info.textContent = 'Connecting…';
+    await loadRecent();
+    subscribeRealtime();
+
+    // re-check and update status periodically
+    setInterval(() => {
+      if (isRealtimeOpen()) {
+        $info.textContent = 'Live — realtime';
+        checkConnectedAndStopFallback();
+      } else {
+        $info.textContent = fallbackPollId ? 'Live — polling' : 'Connected (no realtime)';
+      }
+    }, 2000);
+  }
+
+  // events
+  $form.addEventListener('submit', sendMessage);
+  $message.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } });
+
+  // kick off
+  start().catch(err => { console.error('Startup error', err); $info.textContent = 'Startup error'; });
+
+  // expose for debugging
+  window.chatDebug = { loadRecent, subscribeRealtime, supabase, start };
+})();
+</script>
+</body>
+</html>
