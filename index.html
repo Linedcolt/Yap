@@ -59,19 +59,56 @@ const $form = document.getElementById('sendForm');
 const $text = document.getElementById('text');
 const $name = document.getElementById('name');
 
+function nowIso(){ return new Date().toISOString(); }
+function uid(){
+  if(window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  // fallback
+  return 'tmp-' + Date.now().toString(36) + '-' + Math.floor(Math.random()*1e6).toString(36);
+}
+
 function formatTime(ts){
   try{ return new Date(ts).toLocaleTimeString(); } catch(e){ return ''; }
 }
 
-function addMessage(m, top=false, mark=''){
+/* Create or update message DOM element.
+   m may be optimistic (no id, has tempId) or server row (has id).
+   options.mark: optional string to append to meta (e.g. 'sending…' or 'failed').
+*/
+function addMessage(m, opts = {}) {
+  // if server row and already present (by id), skip to avoid duplicate
+  if (m.id && document.querySelector(`[data-id="${m.id}"]`)) return;
+
+  // if optimistic and exists, update it instead of creating new
+  if (opts.tempId) {
+    const existing = document.querySelector(`[data-temp-id="${opts.tempId}"]`);
+    if (existing) {
+      // update its meta/message
+      const meta = existing.querySelector('.meta');
+      if (meta) meta.textContent = (m.username || 'anon') + ' • ' + formatTime(m.created_at || nowIso()) + (opts.mark ? ' • ' + opts.mark : '');
+      const body = existing.querySelector('.body');
+      if (body) body.textContent = m.content;
+      return existing;
+    }
+  }
+
   const el = document.createElement('div');
   el.className = 'msg';
+  if (m.id) el.setAttribute('data-id', m.id);
+  if (opts.tempId) el.setAttribute('data-temp-id', opts.tempId);
+
   const meta = document.createElement('div'); meta.className='meta';
-  meta.textContent = (m.username || 'anon') + ' • ' + formatTime(m.created_at || m.createdAt || m.createdAt) + (mark ? ' • ' + mark : '');
-  const body = document.createElement('div'); body.textContent = m.content;
+  meta.textContent = (m.username || 'anon') + ' • ' + formatTime(m.created_at || nowIso()) + (opts.mark ? ' • ' + opts.mark : '');
+  const body = document.createElement('div'); body.className = 'body'; body.textContent = m.content;
+
   el.appendChild(meta); el.appendChild(body);
-  if(top) $messages.prepend(el); else $messages.appendChild(el);
+  $messages.appendChild(el);
   $messages.scrollTop = $messages.scrollHeight;
+  return el;
+}
+
+function removeOptimistic(tempId){
+  const el = document.querySelector(`[data-temp-id="${tempId}"]`);
+  if(el) el.remove();
 }
 
 /* load recent messages */
@@ -98,10 +135,13 @@ async function subscribeRealtime(){
   channel = supabase
     .channel('public:messages')
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => {
-      if(payload && payload.new) addMessage(payload.new);
+      const row = payload?.new;
+      if(!row) return;
+      // skip if we already have this id (prevents duplication if we already added returned row)
+      if (row.id && document.querySelector(`[data-id="${row.id}"]`)) return;
+      addMessage(row);
     });
 
-  // subscribe returns a subscription object; we call subscribe() and wait for the status promise
   const { error } = await channel.subscribe();
   if(error){
     console.error('channel subscribe error', error);
@@ -112,7 +152,7 @@ async function subscribeRealtime(){
   $status.textContent = 'connected (realtime)';
 }
 
-/* send a message (with debug logging) */
+/* send a message (with optimistic UI that gets replaced) */
 $form.addEventListener('submit', async (ev) => {
   ev.preventDefault();
   const txt = $text.value.trim();
@@ -120,34 +160,52 @@ $form.addEventListener('submit', async (ev) => {
   if(!txt) return;
   $text.value = '';
 
-  // optimistic UI
-  const optimisticRow = { username: name, content: txt, created_at: new Date().toISOString() };
-  addMessage(optimisticRow, false, 'sending…');
+  // create optimistic row with temp id
+  const tempId = uid();
+  const optimisticRow = { username: name, content: txt, created_at: nowIso() };
+  addMessage(optimisticRow, { tempId, mark: 'sending…' });
 
-  // insert and request returning row so we can inspect errors
+  // insert and request returning row
   const { data, error } = await supabase
     .from('messages')
     .insert([{ content: txt, username: name }])
-    .select();
+    .select(); // request returned row(s)
 
-  console.log('insert response', { data, error });
+  console.log('insert response', { data, error, tempId });
 
   if(error){
-    // show failed message visually
-    addMessage({ username: name, content: '⚠ failed to send: ' + (error.message || JSON.stringify(error)), created_at: new Date().toISOString() }, false, 'failed');
-  } else {
-    // optionally you can replace optimistic UI with returned row — we rely on realtime to append the inserted row too
+    console.error('insert failed', error);
+    // mark optimistic as failed
+    const el = document.querySelector(`[data-temp-id="${tempId}"]`);
+    if(el){
+      const meta = el.querySelector('.meta');
+      if(meta) meta.textContent = (name || 'anon') + ' • ' + formatTime(nowIso()) + ' • failed';
+      const body = el.querySelector('.body');
+      if(body) body.textContent = '⚠ failed to send: ' + (error.message || JSON.stringify(error));
+      el.setAttribute('data-send-failed', '1');
+    }
+  } else if(data && data[0]){
+    const returned = data[0];
+    // remove optimistic and add the returned row (so it looks like single message)
+    removeOptimistic(tempId);
+    // If realtime fires later, it will be ignored because addMessage checks for existing id
+    addMessage(returned);
     $status.textContent = 'message sent';
+  } else {
+    // fallback: if no returned row but no error, clear optimistic mark
+    const el = document.querySelector(`[data-temp-id="${tempId}"]`);
+    if(el){
+      const meta = el.querySelector('.meta');
+      if(meta) meta.textContent = (name || 'anon') + ' • ' + formatTime(nowIso());
+      el.removeAttribute('data-temp-id');
+    }
   }
 });
 
 /* init */
 (async function init(){
-  // If you want a service worker, create /sw.js on your host and register with:
-  // navigator.serviceWorker.register('/sw.js') -- but don't register blob SWs on GitHub Pages
   await loadMessages();
   await subscribeRealtime();
-  // mark connected if load + subscribe succeeded
   if($status.textContent === 'connected (realtime)' || $status.textContent === 'loaded') {
     $status.textContent = 'connected';
   }
