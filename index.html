@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Supabase Chat — Single File PWA</title>
+<title>Supabase Chat — Debug</title>
 <style>
   :root{--bg:#0f1724;--card:#0b1220;--accent:#06b6d4;--muted:#94a3b8; color-scheme:dark}
   html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;background:linear-gradient(180deg,#071023 0%, #081426 100%);color:#e6eef6}
@@ -41,25 +41,17 @@
     </form>
 
     <div class="tiny">This demo stores messages in a public `messages` table. Use for testing only.</div>
-    <footer>Single-file PWA demo • Works offline (cached shell) • Not hardened for production</footer>
+    <footer>Single-file demo • Not hardened for production</footer>
   </div>
 
 <script type="module">
-/* ================== CONFIG: set these from your Supabase project ==================
-   - SUPABASE_URL: your_project.supabase.co
-   - SUPABASE_ANON_KEY: the anon/public key (ok for client reads/inserts if policies allow)
-   You can also replace these with environment injection on server hosting.
-*/
+/* ========== CONFIG: replace with your project values ========== */
 const SUPABASE_URL = 'https://vwjibwesyxomcxtyneof.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ3amlid2VzeXhvbWN4dHluZW9mIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzEwODE3MjcsImV4cCI6MjA4NjY1NzcyN30.WM17MsaWs1IgA7rmbanztoayBJmk2F2oEpgsqchgXFA';
+/* ============================================================ */
 
-/* ----------------- note about CDN: using esm.sh tends to be reliable for quick demos.
-   If you bundle in production, install @supabase/supabase-js locally. ----------------*/
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-  // persistSession: false, // choose your preference
-});
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const $messages = document.getElementById('messages');
 const $status = document.getElementById('status');
@@ -71,15 +63,14 @@ function formatTime(ts){
   try{ return new Date(ts).toLocaleTimeString(); } catch(e){ return ''; }
 }
 
-function addMessage(m, top=false){
+function addMessage(m, top=false, mark=''){
   const el = document.createElement('div');
   el.className = 'msg';
   const meta = document.createElement('div'); meta.className='meta';
-  meta.textContent = (m.username || 'anon') + ' • ' + formatTime(m.created_at || m.createdAt || m.createdAt);
+  meta.textContent = (m.username || 'anon') + ' • ' + formatTime(m.created_at || m.createdAt || m.createdAt) + (mark ? ' • ' + mark : '');
   const body = document.createElement('div'); body.textContent = m.content;
   el.appendChild(meta); el.appendChild(body);
   if(top) $messages.prepend(el); else $messages.appendChild(el);
-  // keep scroll near bottom
   $messages.scrollTop = $messages.scrollHeight;
 }
 
@@ -92,93 +83,74 @@ async function loadMessages(){
     .order('created_at', { ascending: true })
     .limit(200);
   if(error){
-    console.error(error);
-    $status.textContent = 'error loading';
+    console.error('loadMessages error', error);
+    $status.textContent = 'error loading (see console)';
     return;
   }
   $messages.innerHTML = '';
   data.forEach(m => addMessage(m));
-  $status.textContent = 'connected';
+  $status.textContent = 'loaded';
 }
 
 /* subscribe to realtime inserts using a channel + postgres_changes */
-function subscribeRealtime(){
-  const channel = supabase
-    .channel('public:messages') // a descriptive name
+let channel = null;
+async function subscribeRealtime(){
+  channel = supabase
+    .channel('public:messages')
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => {
       if(payload && payload.new) addMessage(payload.new);
-    })
-    .subscribe((status) => {
-      // status gives alive / connected info
-      console.log('channel status', status);
     });
 
-  // handle connection lost / reconnected for UI:
-  supabase.on('connection', ({ state }) => {
-    $status.textContent = state === 'CONNECTED' ? 'connected' : state.toLowerCase();
-  });
+  // subscribe returns a subscription object; we call subscribe() and wait for the status promise
+  const { error } = await channel.subscribe();
+  if(error){
+    console.error('channel subscribe error', error);
+    $status.textContent = 'realtime error';
+    return;
+  }
+  console.log('channel status SUBSCRIBED');
+  $status.textContent = 'connected (realtime)';
 }
 
-/* send a message */
+/* send a message (with debug logging) */
 $form.addEventListener('submit', async (ev) => {
   ev.preventDefault();
   const txt = $text.value.trim();
   const name = $name.value.trim() || 'anon';
   if(!txt) return;
   $text.value = '';
+
   // optimistic UI
-  addMessage({ username: name, content: txt, created_at: new Date().toISOString() }, false);
+  const optimisticRow = { username: name, content: txt, created_at: new Date().toISOString() };
+  addMessage(optimisticRow, false, 'sending…');
 
-  const { error } = await supabase.from('messages').insert([{ content: txt, username: name }]);
+  // insert and request returning row so we can inspect errors
+  const { data, error } = await supabase
+    .from('messages')
+    .insert([{ content: txt, username: name }])
+    .select();
+
+  console.log('insert response', { data, error });
+
   if(error){
-    console.error('insert error', error);
-    // you might show UI feedback or retry
-  }
-});
-
-/* basic startup */
-(async function init(){
-  // register a tiny service worker from a blob so file stays single-file
-  if('serviceWorker' in navigator){
-    try {
-      const swCode = `
-self.addEventListener('install', (evt)=> evt.waitUntil(caches.open('chat-shell-v1').then(c=>c.addAll(['/']))));
-self.addEventListener('activate', (evt)=> evt.waitUntil(self.clients.claim()));
-self.addEventListener('fetch', (evt)=>{
-  if(evt.request.mode === 'navigate'){
-    evt.respondWith(caches.open('chat-shell-v1').then(c=>c.match('/')).then(res=>res || fetch(evt.request)));
+    // show failed message visually
+    addMessage({ username: name, content: '⚠ failed to send: ' + (error.message || JSON.stringify(error)), created_at: new Date().toISOString() }, false, 'failed');
   } else {
-    evt.respondWith(fetch(evt.request).catch(()=>caches.match(evt.request)));
+    // optionally you can replace optimistic UI with returned row — we rely on realtime to append the inserted row too
+    $status.textContent = 'message sent';
   }
 });
-`;
-      const blob = new Blob([swCode], {type:'text/javascript'});
-      const swUrl = URL.createObjectURL(blob);
-      await navigator.serviceWorker.register(swUrl);
-      console.log('SW registered from blob');
-    } catch(e){ console.warn('SW not registered', e); }
-  }
 
-  // inlined manifest so still single-file PWA
-  try {
-    const manifest = {
-      name: 'Supabase Chat (demo)',
-      short_name: 'ChatDemo',
-      start_url: '.',
-      display: 'standalone',
-      background_color: '#071023',
-      theme_color: '#06b6d4'
-    };
-    const manBlob = new Blob([JSON.stringify(manifest)], {type:'application/json'});
-    const manUrl = URL.createObjectURL(manBlob);
-    const link = document.createElement('link');
-    link.rel = 'manifest';
-    link.href = manUrl;
-    document.head.appendChild(link);
-  } catch(e){ /* ignore */ }
-
+/* init */
+(async function init(){
+  // If you want a service worker, create /sw.js on your host and register with:
+  // navigator.serviceWorker.register('/sw.js') -- but don't register blob SWs on GitHub Pages
   await loadMessages();
-  subscribeRealtime();
+  await subscribeRealtime();
+  // mark connected if load + subscribe succeeded
+  if($status.textContent === 'connected (realtime)' || $status.textContent === 'loaded') {
+    $status.textContent = 'connected';
+  }
 })();
 </script>
 </body>
